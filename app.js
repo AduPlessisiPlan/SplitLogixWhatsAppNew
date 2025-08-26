@@ -10,6 +10,7 @@ app.use(express.json());
 // Set port and verify_token
 const port = process.env.PORT || 3000;
 const verifyToken = process.env.VERIFY_TOKEN;
+const WA_APP_SECRET   = process.env.WA_APP_SECRET;
 const CAMUNDA_WEBHOOK_URL = process.env.CAMUNDA_WEBHOOK_URL;
 const CAMUNDA_BASIC_USER = process.env.CAMUNDA_BASIC_USER;
 const CAMUNDA_BASIC_PASS = process.env.CAMUNDA_BASIC_PASS;
@@ -19,9 +20,23 @@ const log = {
   warn: (...a) => console.warn(...a),
   error: (...a) => console.error(...a)
 };
-if (!CAMUNDA_WEBHOOK_URL || !CAMUNDA_BASIC_PASS) {
-  console.error("Missing required env vars. Please set CAMUNDA_WEBHOOK_URL, CAMUNDA_BASIC_PASS.");
+const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
+
+if (!WA_APP_SECRET || !CAMUNDA_WEBHOOK_URL || !CAMUNDA_BASIC_PASS) {
+  console.error("Missing required env vars. Please set WA_APP_SECRET, CAMUNDA_WEBHOOK_URL, CAMUNDA_BASIC_PASS.");
   process.exit(1);
+}
+
+function verifyMetaSignature(req) {
+  const sig = req.headers["x-hub-signature-256"];
+  if (!sig || !WA_APP_SECRET) return false;
+  const body = JSON.stringify(req.body);
+  const expected = "sha256=" + crypto.createHmac("sha256", WA_APP_SECRET).update(body).digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
 }
 
 function extractInbound(body) {
@@ -74,6 +89,10 @@ app.get('/', (req, res) => {
 
 // Route for POST requests
 app.post('/', async (req, res) => {
+  if (!verifyMetaSignature(req)) {
+    log.warn("Invalid or missing X-Hub-Signature-256");
+    return res.sendStatus(401);
+  }
   const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
   console.log(`\n\nWebhook received ${timestamp}\n`);
   console.log(JSON.stringify(req.body, null, 2));
